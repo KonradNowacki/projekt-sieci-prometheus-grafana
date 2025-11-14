@@ -1,47 +1,69 @@
 version: '3.8'
 
 services:
-  linux-node:
-    image: prom/node-exporter:latest
-    container_name: linux-node
+  # serwer ofiary (nginx) z mounted config (nginx.conf w ./nginx/nginx.conf)
+  target_node:
+    image: nginx:stable-alpine
+    container_name: target_node
     ports:
-      - "9100:9100"
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/html:/usr/share/nginx/html:ro
     networks:
       - monitoring-net
 
-  load-generator:
-    image: alpine:latest
-    container_name: load-generator
-    networks:
-      - monitoring-net
-    command: [ "sh", "-c", "apk add --no-cache stress-ng curl && tail -f /dev/null" ]
-    depends_on:
-      - linux-node
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
+  # exporter, który wystawia metryki Prometheusa z nginx (scrapuje /nginx_status)
+  nginx_exporter:
+    image: nginx/nginx-prometheus-exporter:0.11.0
+    container_name: nginx_exporter
     ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
-    networks:
-      - monitoring-net
+      - "9113:9113"
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - NGINX_STATUS_URL=http://target_node:80/nginx_status
+    command:
+      - -nginx.scrape-uri=http://target_node:80/nginx_status
+    depends_on:
+      - target_node
+    networks:
+      - monitoring-net
 
+  # Prometheus
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
-      - linux-node
+      - nginx_exporter
     networks:
       - monitoring-net
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring-net
+
+  # kontener, z którego ręcznie będziesz wykonywać żądania (nie atakuje automatycznie)
+  attacker_node:
+    image: alpine:latest
+    container_name: attacker_node
+    networks:
+      - monitoring-net
+    command: [ "sh", "-c", "apk add --no-cache curl && tail -f /dev/null" ]
+    depends_on:
+      - target_node
 
 networks:
   monitoring-net:
